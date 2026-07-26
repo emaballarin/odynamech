@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "odynamech"
+dynamic = ["version"]
+authors = [
+    {name = "Emanuele Ballarin", email = "emanuele@ballarin.cc"}
+]
+description = "Open biomechanics data as a dynamical-systems and machine-learning testbed"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.14"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "License :: OSI Approved :: MIT License",
+]
+keywords = [
+    "PyTorch",
+    "Machine Learning",
+    "Dynamical Systems",
+    "Time Series",
+    "Multivariate Time Series",
+    "Biomechanics",
+    "Motion Capture",
+    "Dataset",
+]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "safetensors>=0.4",
+    "torch>=2.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+cli = ["simple_parsing>=0.1"]
+
+[project.scripts]
+odynamech = "odynamech.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/emaballarin/odynamech"
+
+[tool.hatch.build.targets.wheel]
+packages = ["odynamech"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "odynamech/_version.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "corpus: needs a built corpus on disk (skipped unless ODYNAMECH_TEST_CORPUS is set)",
+    "network: reaches the network (deselected by default; run with '-m network')",
+]
