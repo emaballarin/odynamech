@@ -9,6 +9,7 @@ from the caller: there is no fallback, no environment-variable default and no
 from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field
+from urllib.parse import urlsplit
 
 from .config import DRIVELINE_RAW_BASE
 from .config import DRIVELINE_RELEASE_BASE
@@ -58,6 +59,13 @@ class DrivelineRelease(Source):
     tag: str = DRIVELINE_RELEASE_TAG
     gestures: tuple[str, ...] = GESTURES
 
+    def __post_init__(self) -> None:
+        """Normalise the two overridable bases; the defaults already comply."""
+        object.__setattr__(self, "base_url", _strip_trailing_slash(self.base_url, "DrivelineRelease base_url"))
+        object.__setattr__(
+            self, "raw_base_url", _strip_trailing_slash(self.raw_base_url, "DrivelineRelease raw_base_url")
+        )
+
     def assets(self) -> Iterator[Asset]:
         """Per-gesture signal archives, plus the scalar tables from the git tree."""
         for gesture in self.gestures:
@@ -104,6 +112,13 @@ class RawMirror(Source):
             raise ValueError(
                 "RawMirror requires an explicit base_url; it has no default. "
                 "Use DrivelineRelease() if you want the original upstream source."
+            )
+        object.__setattr__(self, "base_url", _strip_trailing_slash(self.base_url, "RawMirror base_url"))
+        if self.scalar_base_url:
+            object.__setattr__(
+                self,
+                "scalar_base_url",
+                _strip_trailing_slash(self.scalar_base_url, "RawMirror scalar_base_url"),
             )
 
     def assets(self) -> Iterator[Asset]:
@@ -183,3 +198,22 @@ def _is_archive(name: str) -> bool:
     """Whether a filename looks like an archive this package will unpack."""
     lowered = name.lower()
     return any(lowered.endswith(suffix) for suffix in _ARCHIVE_SUFFIXES)
+
+
+def _strip_trailing_slash(url: str, field: str) -> str:
+    """Drop trailing slashes from a base that will be joined with `/`.
+
+    A doubled separator is invisible on hosts that normalise paths, but an
+    S3-style host treats `//` as a literal key separator and answers 404, so
+    the mistake surfaces as a missing file rather than as a malformed URL.
+
+    Stripping can eat the whole locator — `https://` becomes `https:` and `/`
+    becomes empty — so what remains is parsed rather than pattern-matched, and a
+    base left with neither host nor path is refused instead of being handed on
+    as something that merely looks usable.
+    """
+    stripped = url.rstrip("/")
+    parts = urlsplit(stripped)
+    if not parts.netloc and not parts.path:
+        raise ValueError(f"{field} {url!r} has no host or path to fetch from")
+    return stripped

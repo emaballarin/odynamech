@@ -1,5 +1,6 @@
 """Access-layer behaviour against a real corpus. Skipped unless ODYNAMECH_TEST_CORPUS is set."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,7 @@ import pytest
 import torch
 
 from odynamech import OBP
+from odynamech.api import _find_pack
 from odynamech.harmonise import round_trip_ok
 from odynamech.harmonise import SEMANTIC_KEY
 from odynamech.schema import build_schema
@@ -24,8 +26,18 @@ pytestmark = pytest.mark.corpus
 
 @pytest.fixture(scope="module")
 def tensors(corpus_path: Path) -> Path:
-    """The directory the corpus lives in, for the pack-vs-directory comparisons."""
-    return corpus_path if corpus_path.is_dir() else corpus_path.parent
+    """The per-gesture intermediates, for pack-vs-directory comparisons, or skip.
+
+    A corpus obtained through `PackagedCorpus` holds only the self-contained
+    pack; the intermediates would be redundant, so their absence is the normal
+    state of that path rather than a fault. A comparison between the two
+    representations then has nothing to compare and is skipped, matching how
+    `verify._gate_pack` reports the same situation as not applicable.
+    """
+    where = corpus_path if corpus_path.is_dir() else corpus_path.parent
+    if not any(where.glob("*_ragged.safetensors")):
+        pytest.skip(f"only a self-contained pack under {where}; no intermediates to compare against")
+    return where
 
 
 # ------------------------------------------------------------------ schema
@@ -249,11 +261,43 @@ def test_harmonised_select_applies_to_both_gestures(obp: OBP) -> None:
 # ---------------------------------------------------------------- store / pack
 
 
-def test_channel_hash_mismatch_raises(tensors: Path) -> None:
-    """Gate 2: a drifted hash must be caught on open, not silently tolerated."""
-    store = Store(tensors)
+def _locate_pack(corpus_path: Path) -> Path:
+    """The single-file pack, given either it or the directory holding it.
+
+    Defers to the library's own resolution rule rather than globbing, so a bare
+    `*.safetensors` glob cannot hand back a per-gesture intermediate.
+    """
+    pack = corpus_path if corpus_path.is_file() else _find_pack(corpus_path)
+    if pack is None:
+        pytest.skip(f"no single-file pack under {corpus_path}")
+    return pack
+
+
+def _drift_recorded_hash(store: Store, gesture: str) -> None:
+    """Corrupt the channel hash a store records, whichever layout it holds.
+
+    A pack keeps per-view metadata as JSON inside the single top-level
+    `__metadata__` and re-parses it on every read, so mutating what `meta()`
+    hands back would be thrown away; the directory layout holds one live dict
+    per file. Poking the right one keeps the test honest on both.
+    """
+    key = f"{gesture}/ragged"
+    if store.is_pack:
+        store._pack_meta[key] = json.dumps(json.loads(store._pack_meta[key]) | {"channel_hash": "0" * 64})
+    else:
+        store._meta[key]["channel_hash"] = "0" * 64
+
+
+def test_channel_hash_mismatch_raises(corpus_path: Path) -> None:
+    """Gate 2: a drifted hash must be caught on open, not silently tolerated.
+
+    Takes whatever the caller nominated — a pack or an intermediates directory —
+    because the guard lives in `Store.channels`, so it must hold for both and
+    needs neither representation in particular.
+    """
+    store = Store(corpus_path)
     gesture = store.gestures[0]
-    store._meta[f"{gesture}/ragged"]["channel_hash"] = "0" * 64
+    _drift_recorded_hash(store, gesture)
     with pytest.raises(ChannelHashMismatch):
         store.channels(gesture)
 
@@ -454,3 +498,25 @@ def test_every_gate_passes(obp: OBP, corpus_path: Path, raw_root: Path | None) -
     report = verify_corpus(corpus_path, raw=raw_root, tensors=tensors)
     assert report.ok, "failed gates:\n" + "\n".join(report.failed)
     assert len(report.passed) > 50
+
+
+def test_verify_works_on_a_pack_without_intermediates(corpus_path: Path, tmp_path: Path) -> None:
+    """A corpus fetched via PackagedCorpus has no intermediates; verify must cope.
+
+    The pack is self-contained, so a fetched corpus never has the per-gesture
+    files beside it. The round-trip gate has nothing to compare against there —
+    that is normal, and must be reported as not-applicable rather than crashing.
+
+    The pack is symlinked rather than copied: the gate only reads it, and it is
+    a gigabyte.
+    """
+    from odynamech import verify_corpus
+
+    pack = _locate_pack(corpus_path)
+    lone = tmp_path / "tensors"
+    lone.mkdir()
+    (lone / pack.name).symlink_to(pack)
+
+    report = verify_corpus(lone / pack.name, tensors=lone)
+    assert report.ok, "failed gates:\n" + "\n".join(report.failed)
+    assert any("not applicable" in note for note in report.notes)

@@ -57,6 +57,38 @@ def test_raw_mirror_honours_a_separate_scalar_base() -> None:
     assert csvs and all(a.url.startswith("https://scalars.invalid") for a in csvs)
 
 
+@pytest.mark.parametrize(
+    "base", ["https://m.invalid/mirror", "https://m.invalid/mirror/", "https://m.invalid/mirror///"]
+)
+def test_raw_mirror_never_emits_a_doubled_slash(base: str) -> None:
+    """A trailing slash on the base must not survive into the fetched URLs.
+
+    Hosts that normalise paths hide this; an S3-style host treats `//` as a
+    literal key separator and answers 404 instead.
+    """
+    source = RawMirror(base_url=base)
+    assert source.base_url == "https://m.invalid/mirror"
+    assert all(a.url.startswith("https://m.invalid/mirror/") for a in source.assets())
+    assert not any("//" in a.url.removeprefix("https://") for a in source.assets())
+
+
+def test_every_joinable_base_is_normalised() -> None:
+    """Not just `RawMirror.base_url`: the scalar base and both release bases too."""
+    mirror = RawMirror(base_url="https://sig.invalid/s/", scalar_base_url="https://scalars.invalid/c/")
+    release = DrivelineRelease(base_url="https://rel.invalid/r/", raw_base_url="https://raw.invalid/g/")
+    for source in (mirror, release):
+        assert not any("//" in a.url.removeprefix("https://") for a in source.assets())
+
+
+@pytest.mark.parametrize("degenerate", ["https://", "/", "///"])
+def test_a_base_that_is_only_slashes_is_rejected(degenerate: str) -> None:
+    """Stripping must not turn a useless base into one that merely looks valid."""
+    with pytest.raises(ValueError, match="no host or path"):
+        RawMirror(base_url=degenerate)
+    with pytest.raises(ValueError, match="no host or path"):
+        DrivelineRelease(base_url=degenerate)
+
+
 def test_raw_mirror_passes_checksums_through() -> None:
     """A mirror can be verified as well as trusted."""
     rel = "pitching/joint_angles.zip"

@@ -394,10 +394,20 @@ def _gate_pack(tensors: Path, report: Report) -> None:
     if pack_path is None:
         report.note("no single-file pack alongside the intermediates; round-trip gate skipped")
         return
+
+    # This gate compares a pack against the per-gesture intermediates it was made
+    # from. A corpus obtained via `PackagedCorpus` has no intermediates — the pack
+    # is self-contained and they would be redundant — so there is simply nothing
+    # to compare against. That is the normal state of a fetched corpus, not a
+    # failure, and must not be reported as one.
+    if not any(tensors.glob("*_ragged.safetensors")):
+        report.note("no per-gesture intermediates beside the pack; round-trip gate not applicable")
+        return
+
     try:
         verify_pack(pack_path, tensors)
         report.check(True, "pack reproduces every tensor and both tables exactly")
-    except PackError as exc:
+    except (PackError, FileNotFoundError, KeyError) as exc:
         report.check(False, "pack round-trip", str(exc)[:300])
 
 
